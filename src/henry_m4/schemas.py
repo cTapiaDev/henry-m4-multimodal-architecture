@@ -98,3 +98,33 @@ class ResultadoPipelineVision(BaseModel):
     decision_ruteo: DecisionRuteo
     motivo_ruteo: str
     datos_validados: Optional[SolicitudCreditoBancario] = None
+
+
+# 🟢 -------------------------------------------------------------------------
+# 🟢 CONTRATOS PARA AUDIO (STT -> LLM -> TTS) - Módulo 4 Lección 2
+# 🟢 -------------------------------------------------------------------------
+
+class ResumenLlamadaSoporte(BaseModel):
+    id_llamada: str = Field(..., description="ID único de la llamada")
+    motivo_principal_llamada: str = Field(..., description="Clasificación del problema técnico central")
+    entidades_afectadas: list[str] = Field(..., description="Ej: 'cuenta', 'tarjeta', 'login'")
+    resumen_para_tts: str = Field(..., description="Resumen limpio y profesional para ser leído por una IA de voz")
+    requiere_escalamiento: bool = Field(..., description="True si requiere atención técnica o humana")
+
+    @model_validator(mode="after")
+    def verificar_perdida_de_contexto(self) -> "ResumenLlamadaSoporte":
+        """
+        Evita el Efecto Cascada: Si la transcripción cruda hablaba de un problema técnico, 
+        el LLM no puede hacer un resumen genérico como "El cliente pidió que lo llamen".
+        """
+        resumen_lower = self.resumen_para_tts.lower()
+        
+        # Validar si el LLM omitió la urgencia técnica
+        if "llamen de vuelta" in resumen_lower or "volver a llamar" in resumen_lower:
+            if not any(keyword in resumen_lower for keyword in ["cuenta", "acceso", "problema", "detalle"]):
+                raise ValueError(
+                    "Pérdida de Intención Crítica (Alucinación por Omisión): El resumen generado ignora "
+                    "el problema técnico del usuario y solo menciona que lo llamen. Re-analiza la transcripción "
+                    "fonética y extrae el motivo real del problema."
+                )
+        return self
