@@ -8,10 +8,10 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     course_mode: str
-    openai_api_key: str
-    model_vision: str
-    model_agent: str
-    reasoning_effort: str
+    gemini_api_key: str
+    groq_api_key: str
+    gemini_model: str
+    groq_model: str
 
     @property
     def is_live(self) -> bool:
@@ -19,8 +19,8 @@ class Settings:
 
 get_settings = lambda: Settings(
     course_mode=os.getenv("COURSE_MODE", "offline"),
-    openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-    model_vision=os.getenv("OPENAI_MODEL_VISION", "gpt-6-luna"),
-    model_agent=os.getenv("OPENAI_MODEL_AGENT", "gpt-6.1-sol"),
-    reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "low"),
+    gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+    groq_api_key=os.getenv("GROQ_API_KEY", ""),
+    gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+    groq_model=os.getenv("GROQ_MODEL", "llama-3.2-11b-vision-preview"),
 )

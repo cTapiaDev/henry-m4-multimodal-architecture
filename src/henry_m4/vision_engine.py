@@ -1,11 +1,95 @@
+import base64
+import json
+from pathlib import Path
 from typing import Any
 from pydantic import ValidationError
+from PIL import Image
+
+from .config import get_settings
 from .schemas import (
     CalidadEscaneo,
     DecisionRuteo,
     ResultadoPipelineVision,
     SolicitudCreditoBancario,
 )
+
+class ModeloGeminiVisionLive:
+    def __init__(self, api_key: str, model_name: str) -> None:
+        from google import genai
+        from google.genai import types
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
+        self.types = types
+
+    def extraer(self, ruta_imagen: str, ultimo_error: str | None = None) -> dict[str, Any]:
+        imagen_pil = Image.open(ruta_imagen)
+        
+        prompt_sistema = (
+            "Eres un auditor bancario de riesgos. Analiza la imagen del formulario de solicitud de crédito. "
+            "REGLAS CRÍTICAS DE ABSTENCIÓN VISUAL: "
+            "1. Si un campo numérico (como el ingreso mensual) está manchado, borroso o ilegible, coloca null (None). "
+            "Está terminantemente prohibido inventar o estimar números que no se vean con total claridad. "
+            "2. Verifica si el recuadro de firma contiene un trazo de bolígrafo real. Si está vacío, posee_firma_autografa = False. "
+            "3. En 'evidencias_visuales', registra la transcripción literal cruda de cada campo antes de tiparlo. "
+            "4. Si hay campos borrosos o nulos, la confianza_global_extraccion debe ser <= 0.65."
+        )
+        
+        prompt_usuario = "Extrae los datos de esta imagen estructurados según el esquema provisto."
+        if ultimo_error:
+            prompt_usuario += f"\n\nTU INTENTO ANTERIOR FALLÓ LA VALIDACIÓN CON ESTE ERROR:\n{ultimo_error}\nCorrige el valor."
+
+        configuracion = self.types.GenerateContentConfig(
+            system_instruction=prompt_sistema,
+            response_mime_type="application/json",
+            response_schema=SolicitudCreditoBancario,
+            temperature=0.0,
+        )
+
+        respuesta = self.client.models.generate_content(
+            model=self.model_name,
+            contents=[imagen_pil, prompt_usuario],
+            config=configuracion,
+        )
+        return json.loads(respuesta.text)
+
+
+class ModeloGroqVisionLive:
+    def __init__(self, api_key: str, model_name: str) -> None:
+        from groq import Groq
+        self.client = Groq(api_key=api_key)
+        self.model_name = model_name
+
+    def extraer(self, ruta_imagen: str, ultimo_error: str | None = None) -> dict[str, Any]:
+        bytes_img = Path(ruta_imagen).read_bytes()
+        img_b64 = base64.b64encode(bytes_img).decode("utf-8")
+        
+        esquema_json = json.dumps(SolicitudCreditoBancario.model_json_schema(), ensure_ascii=False)
+        prompt_sistema = (
+            f"Analiza el formulario bancario en la imagen y responde ÚNICAMENTE con un JSON válido "
+            f"que cumpla con este JSON Schema:\n{esquema_json}\n"
+            f"Si un campo está manchado o borroso, pon null en ese campo. No inventes montos."
+        )
+        
+        prompt_usuario = "Extrae los campos del formulario."
+        if ultimo_error:
+            prompt_usuario += f" Error previo a corregir: {ultimo_error}"
+
+        chat_completion = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[
+                {"role": "system", "content": prompt_sistema},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt_usuario},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                    ],
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0,
+        )
+        return json.loads(chat_completion.choices[0].message.content)
 
 
 class ModeloGuionadoVision:
@@ -81,7 +165,7 @@ class ModeloGuionadoVision:
                     "nombre_solicitante": "Roberto Sánchez Vera",
                     "identificador_tributario": "14.221.890-4",
                     "ingreso_mensual_declarado": 2500.0,
-                    "monto_credito_solicitado": 1500000.0,  # <-- ERROR INTENCIONAL: 1.5 millones en vez de 15 mil
+                    "monto_credito_solicitado": 1500000.0,
                     "plazo_meses": 36,
                     "posee_firma_autografa": True,
                     "confianza_global_extraccion": 0.86,
@@ -109,7 +193,7 @@ class ModeloGuionadoVision:
                     "nombre_solicitante": "Roberto Sánchez Vera",
                     "identificador_tributario": "14.221.890-4",
                     "ingreso_mensual_declarado": 2500.0,
-                    "monto_credito_solicitado": 15000.0,  # <-- CORREGIDO POR SELF-HEALING
+                    "monto_credito_solicitado": 15000.0,
                     "plazo_meses": 36,
                     "posee_firma_autografa": True,
                     "confianza_global_extraccion": 0.89,
@@ -169,25 +253,44 @@ enrutar_solicitud = lambda solicitud: (
 
 
 class PipelineVisionAutoreparable:
-    def __init__(self, max_intentos: int = 3) -> None:
+    def __init__(self, max_intentos: int = 3, forzar_live: bool = False) -> None:
         self.max_intentos = max_intentos
+        self.settings = get_settings()
+        self.usar_live = forzar_live or self.settings.is_live
         self.modelo_offline = ModeloGuionadoVision()
 
-    def procesar_formulario(self, nombre_archivo: str) -> ResultadoPipelineVision:
+    def _obtener_payload(self, ruta: str, intento: int, ultimo_error: str | None) -> dict[str, Any]:
+        if not self.usar_live or not Path(ruta).exists():
+            return self.modelo_offline.invocar_extraccion(ruta, intento, ultimo_error)
+
+        if self.settings.gemini_api_key:
+            try:
+                gemini = ModeloGeminiVisionLive(self.settings.gemini_api_key, self.settings.gemini_model)
+                return gemini.extraer(ruta, ultimo_error)
+            except Exception as e:
+                print(f"⚠️ Gemini falló o superó cuota: {e}. Activando respaldo con Groq...")
+
+        if self.settings.groq_api_key:
+            try:
+                groq = ModeloGroqVisionLive(self.settings.groq_api_key, self.settings.groq_model)
+                return groq.extraer(ruta, ultimo_error)
+            except Exception as e:
+                print(f"⚠️ Groq también falló: {e}. Cayendo a modelo simulado offline.")
+
+        return self.modelo_offline.invocar_extraccion(ruta, intento, ultimo_error)
+
+    def procesar_formulario(self, ruta_archivo: str) -> ResultadoPipelineVision:
         errores_acumulados: list[str] = []
         ultimo_error: str | None = None
 
         for intento in range(1, self.max_intentos + 1):
-            payload_crudo = self.modelo_offline.invocar_extraccion(
-                nombre_archivo=nombre_archivo,
-                intento=intento,
-                ultimo_error_validacion=ultimo_error,
-            )
+            payload_crudo = self._obtener_payload(ruta_archivo, intento, ultimo_error)
+
             try:
                 solicitud_validada = SolicitudCreditoBancario.model_validate(payload_crudo)
                 decision, motivo = enrutar_solicitud(solicitud_validada)
                 return ResultadoPipelineVision(
-                    archivo_origen=nombre_archivo,
+                    archivo_origen=ruta_archivo,
                     intentos_utilizados=intento,
                     bitacora_errores_pydantic=errores_acumulados,
                     decision_ruteo=decision,
@@ -200,7 +303,7 @@ class PipelineVisionAutoreparable:
                 ultimo_error = mensaje_compacto
 
         return ResultadoPipelineVision(
-            archivo_origen=nombre_archivo,
+            archivo_origen=ruta_archivo,
             intentos_utilizados=self.max_intentos,
             bitacora_errores_pydantic=errores_acumulados,
             decision_ruteo=DecisionRuteo.REVISION_HUMANA_HITL,

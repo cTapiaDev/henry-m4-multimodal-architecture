@@ -42,10 +42,10 @@ class SolicitudCreditoBancario(BaseModel):
         None, description="RUT/CUIT/DNI del solicitante. Debe ser None si el campo está borroso o vacío (Abstención)"
     )
     ingreso_mensual_declarado: Optional[float] = Field(
-        None, gt=0, description="Ingreso mensual neto en USD. None si no es legible con certeza"
+        None, description="Ingreso mensual neto en USD. None si no es legible con certeza"
     )
     monto_credito_solicitado: float = Field(
-        ..., gt=0, description="Monto total del crédito solicitado en USD"
+        ..., description="Monto total del crédito solicitado en USD"
     )
     plazo_meses: int = Field(..., ge=6, le=360, description="Plazo de pago solicitado en meses")
     posee_firma_autografa: bool = Field(..., description="True únicamente si se visualiza trazo de firma en el recuadro")
