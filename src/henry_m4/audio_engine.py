@@ -164,6 +164,36 @@ class ModeloGeminiResumenLive:
         )
         return json.loads(respuesta.text)
 
+class ModeloGroqResumenLive:
+    def __init__(self, api_key: str):
+        from groq import Groq
+        self.client = Groq(api_key=api_key)
+
+    def resumir(self, transcripcion: str, error_previo: str | None = None) -> dict:
+        from .schemas import ResumenLlamadaSoporte
+        esquema_json = json.dumps(ResumenLlamadaSoporte.model_json_schema())
+        
+        prompt_sistema = (
+            "Eres un agente de soporte técnico bancario. "
+            "Extrae los datos de la transcripción y responde ESTRICTAMENTE en formato JSON "
+            f"cumpliendo con este esquema: {esquema_json}"
+        )
+        prompt_usuario = f"Transcripción de la llamada: '{transcripcion}'"
+        
+        if error_previo:
+            prompt_usuario += f"\n\nATENCIÓN: Tu intento anterior falló con este error de validación de Pydantic:\n{error_previo}\nCorrige el JSON."
+
+        respuesta = self.client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user", "content": prompt_usuario}
+            ],
+            model="allam-2-7b",
+            response_format={"type": "json_object"},
+            temperature=0.0
+        )
+        return json.loads(respuesta.choices[0].message.content)
+
 
 class PipelineAudioSoporte:
     def __init__(self, max_intentos: int = 3, forzar_live: bool = False):
@@ -179,14 +209,37 @@ class PipelineAudioSoporte:
         return STTOfflineSimulator.transcribir_audio(id_o_ruta).get("transcripcion_cruda", "")
 
     def _obtener_payload_llm(self, transcripcion: str, intento: int, error_previo: str | None) -> dict:
-        if self.usar_live and self.settings.gemini_api_key:
-            gemini = ModeloGeminiResumenLive(self.settings.gemini_api_key, self.settings.gemini_model)
-            return gemini.resumir(transcripcion, error_previo)
-        
-        # Simulación Offline
+        if self.usar_live:
+            if self.settings.gemini_api_key:
+                try:
+                    gemini = ModeloGeminiResumenLive(self.settings.gemini_api_key, self.settings.gemini_model)
+                    return gemini.resumir(transcripcion, error_previo)
+                except Exception as e:
+                    print(f"\n⚠️ Gemini falló (Error 503). Activando PLAN B: Groq...")
+
+            if self.settings.groq_api_key:
+                try:
+                    groq_llm = ModeloGroqResumenLive(self.settings.groq_api_key)
+                    return groq_llm.resumir(transcripcion, error_previo)
+                except Exception as e:
+                    print(f"\n⚠️ Groq LLM también falló ({e}). Activando PLAN C: Simulación Offline...")
+
+        # 🔴 PLAN C: Simulación Offline
         if intento == 1:
-            return {"id_llamada": "CALL-OFF-1", "motivo_principal_llamada": "Solicitud genérica", "entidades_afectadas": [], "resumen_para_tts": "El cliente pidió que lo llamen de vuelta mañana.", "requiere_escalamiento": False}
-        return {"id_llamada": "CALL-OFF-1", "motivo_principal_llamada": "Problema de acceso a cuenta", "entidades_afectadas": ["cuenta"], "resumen_para_tts": "El cliente reporta problemas técnicos para acceder a los detalles de su cuenta.", "requiere_escalamiento": True}
+            return {
+                "id_llamada": "CALL-OFF-1", 
+                "motivo_principal_llamada": "Solicitud genérica", 
+                "entidades_afectadas": [], 
+                "resumen_para_tts": "El cliente pidió que lo llamen de vuelta mañana.", 
+                "requiere_escalamiento": False
+            }
+        return {
+            "id_llamada": "CALL-OFF-1", 
+            "motivo_principal_llamada": "Problema de acceso a cuenta", 
+            "entidades_afectadas": ["cuenta"], 
+            "resumen_para_tts": "Hola, veo que tienes problemas para acceder a tu cuenta. Un especialista te contactará de inmediato.", 
+            "requiere_escalamiento": True
+        }
 
     def procesar_llamada(self, id_o_ruta: str) -> dict:
         transcripcion_cruda = self._obtener_transcripcion(id_o_ruta)
@@ -211,3 +264,65 @@ class PipelineAudioSoporte:
                 error_actual = msg
                 
         return {"estado": "FALLO", "intentos": self.max_intentos, "transcripcion_obtenida": transcripcion_cruda, "errores_atrapados": errores, "datos": None}
+
+
+
+# 🟢 -------------------------------------------------------------------------
+# 🟢 MÓDULO INTERACTIVO DE VOZ EN VIVO (Micrófono -> Groq -> Gemini -> edge-tts)
+# 🟢 -------------------------------------------------------------------------
+import asyncio
+import queue
+import numpy as np
+from pathlib import Path
+import sounddevice as sd
+from scipy.io.wavfile import write
+import edge_tts
+from .config import get_settings
+
+class GrabadorYAsistenteVozLive:
+    def __init__(self):
+        self.settings = get_settings()
+
+    def grabar_microfono_libre(self, ruta_salida: str = "assets/audios/input_mic.wav", fs: int = 44100):
+        cola_audio = queue.Queue()
+
+        # Función que recolecta el audio en pedacitos mientras hablas
+        def callback(indata, frames, time, status):
+            cola_audio.put(indata.copy())
+
+        print("\n🎙️ ¡GRABANDO! Habla libremente el tiempo que necesites...")
+        print("🛑 ATENCIÓN: Mira la parte de ARRIBA de tu VS Code. Presiona ENTER en la caja de texto para detener.")
+
+        # Iniciamos el stream de grabación en segundo plano
+        with sd.InputStream(samplerate=fs, channels=1, dtype='int16', callback=callback):
+            input("Presiona ENTER aquí para detener la grabación...")
+
+        # Vaciamos la cola y unimos todos los pedazos de audio
+        datos_audio = []
+        while not cola_audio.empty():
+            datos_audio.append(cola_audio.get())
+        
+        audio_final = np.concatenate(datos_audio, axis=0)
+
+        Path(ruta_salida).parent.mkdir(parents=True, exist_ok=True)
+        write(ruta_salida, fs, audio_final)
+        print(f"✅ Grabación detenida. Audio guardado en: {ruta_salida}")
+        return ruta_salida
+
+    async def sintetizar_voz_neuronal(self, texto: str, ruta_mp3: str = "assets/audios/output_respuesta.mp3") -> str:
+        Path(ruta_mp3).parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            voz_seleccionada = "es-MX-DaliaNeural" 
+            communicate = edge_tts.Communicate(texto, voz_seleccionada)
+            await communicate.save(ruta_mp3)
+            print(f"🔊 Audio de respuesta generado (Voz Neuronal): {ruta_mp3}")
+            return ruta_mp3
+            
+        except Exception as e:
+            print(f"\n⚠️ Microsoft Edge TTS falló ({e}). Activando voz de respaldo (gTTS)...")
+            from gtts import gTTS
+            tts = gTTS(text=texto, lang='es', tld='es')
+            tts.save(ruta_mp3)
+            print(f"🔊 Audio de respuesta generado (Voz Estándar): {ruta_mp3}")
+            return ruta_mp3

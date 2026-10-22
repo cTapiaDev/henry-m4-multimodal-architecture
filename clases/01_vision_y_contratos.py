@@ -133,7 +133,6 @@ if res_borroso.datos_validados:
     print(f"✍️ Firma Detectada: {datos.posee_firma_autografa}")
     print(f"📊 Confianza Global: {datos.confianza_global_extraccion}")
     
-    # Extraemos la evidencia visual específica del sueldo para ver qué vió Gemini
     evidencia_ingreso = next((e for e in datos.evidencias_visuales if e.campo == "ingreso_mensual_declarado"), None)
     if evidencia_ingreso:
         print("\n🔍 QUÉ VIO GEMINI EN ESE CAMPO (Chain-of-Thought Visual):")
@@ -142,3 +141,4 @@ if res_borroso.datos_validados:
 
 print(f"\n🧭 Ruteo Final: {res_borroso.decision_ruteo.value}")
 print(f"📝 Motivo: {res_borroso.motivo_ruteo}")
+# %%

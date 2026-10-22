@@ -110,3 +110,64 @@ else:
         print(f"   ⚠️ Escalar a humano: {datos.requiere_escalamiento}")
         print(f"   🗣️ Texto para TTS: {datos.resumen_para_tts}")
 # %%
+
+# %% [markdown]
+# ---
+# ### 🎙️ DEMO INTERACTIVA EN VIVO: Habla con el Agente de Voz (Micrófono -> Groq -> Gemini/Groq -> edge-tts)
+# Ejecuta esta celda, habla al micrófono el tiempo que necesites y presiona ENTER para que la IA te responda.
+# ---
+
+# %% [5] Grabación de Voz Libre y Respuesta Sintetizada
+import os
+import importlib
+from pathlib import Path
+from dotenv import load_dotenv
+
+import henry_m4.audio_engine
+importlib.reload(henry_m4.audio_engine)
+
+from henry_m4.config import get_settings
+from henry_m4.audio_engine import PipelineAudioSoporte, GrabadorYAsistenteVozLive
+
+
+if Path.cwd().name == "clases":
+    os.chdir(Path.cwd().parent)
+load_dotenv(override=True)
+
+settings = get_settings()
+asistente = GrabadorYAsistenteVozLive()
+pipeline = PipelineAudioSoporte(max_intentos=3, forzar_live=True)
+
+print("=" * 80)
+print("🎙️ ASISTENTE DE VOZ BANCARIO EN VIVO")
+print("1. Habla al micrófono sin límite de tiempo.")
+print("2. Cuando termines, presiona ENTER en el cuadro de arriba para detener.")
+print("=" * 80)
+
+ruta_wav = asistente.grabar_microfono_libre()
+
+print("\n🔄 Procesando audio con Groq Whisper y validando con Gemini...")
+resultado_voz = pipeline.procesar_llamada(ruta_wav)
+
+print(f"\n📝 Lo que entendió Groq Whisper de tu voz:")
+print(f"   > {resultado_voz['transcripcion_obtenida']}")
+
+if resultado_voz['datos']:
+    datos_agente = resultado_voz['datos']
+    texto_respuesta = datos_agente.resumen_para_tts
+    
+    print(f"\n✅ Respuesta estructurada:")
+    print(f"   🏷️ Motivo: {datos_agente.motivo_principal_llamada}")
+    print(f"   🗣️ Texto para hablarte: '{texto_respuesta}'")
+    
+    print("\n🔊 Sintetizando voz neuronal de respuesta...")
+    ruta_respuesta_mp3 = await asistente.sintetizar_voz_neuronal(texto_respuesta)
+    
+    print("▶️ Reproduciendo respuesta del agente...")
+    if os.name == 'nt':  
+        os.system(f'start {ruta_respuesta_mp3}')
+    else:
+        os.system(f'afplay {ruta_respuesta_mp3}') 
+else:
+    print("❌ El pipeline no pudo validar la respuesta de audio.")
+# %%
