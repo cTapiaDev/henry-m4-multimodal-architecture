@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -128,3 +128,40 @@ class ResumenLlamadaSoporte(BaseModel):
                     "fonética y extrae el motivo real del problema."
                 )
         return self
+
+
+# 🟢 Contratos Pydantic v2 para Clase 3: MCP (Tools, Gobernanza y Auditoría)
+class SolicitudReembolsoMCP(BaseModel):
+    id_compra: str = Field(..., pattern=r"^ORD-\d+$", description="ID de orden con formato ORD-XXX")
+    dias_desde_compra: int = Field(..., ge=0, le=365, description="Días transcurridos desde la compra")
+    porcentaje_consumido: float = Field(..., ge=0.0, le=100.0, description="Porcentaje consumido del producto digital")
+    monto_usd: float = Field(..., gt=0, description="Monto del reembolso en dólares")
+    aprobacion_supervisor: Optional[str] = Field(
+        None, description="Código de firma humana obligatorio si monto_usd > 500"
+    )
+
+    @model_validator(mode="after")
+    def validar_gobernanza_financiera(self) -> "SolicitudReembolsoMCP":
+        if self.monto_usd > 500.0 and not self.aprobacion_supervisor:
+            raise ValueError(
+                f"GOBERNANZA MCP BLOQUEADA: El reembolso de ${self.monto_usd} USD supera el límite automático "
+                "de $500 USD. Se requiere 'aprobacion_supervisor' (Human-in-the-Loop)."
+            )
+        return self
+
+
+class RespuestaAgenteMCP(BaseModel):
+    decision: Literal["REEMBOLSO_APROBADO", "REEMBOLSO_RECHAZADO", "REQUIERE_ESCALAMIENTO_HUMANO"]
+    politica_aplicada: str = Field(..., description="Versión del Resource MCP consultado")
+    id_auditoria_mcp: str = Field(..., description="ID único de trazabilidad generado por el servidor MCP")
+    mensaje_al_cliente: str = Field(..., description="Explicación clara y fiel a la política oficial")
+
+
+class RegistroAuditoriaMCP(BaseModel):
+    id_evento: str
+    timestamp: str
+    transporte: Literal["STDIO", "HTTP_SSE"]
+    metodo_jsonrpc: str
+    version_recurso: str
+    estado: Literal["EXITO", "BLOQUEADO_POR_PYDANTIC"]
+    detalle: str
