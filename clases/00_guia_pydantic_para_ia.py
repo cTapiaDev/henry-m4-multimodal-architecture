@@ -372,3 +372,4 @@ try:
 except ValidationError as err:
     print("⚡ CIRCUIT BREAKER DE PYDANTIC DETUVO EL PROCESO ANTES DE LLAMAR A GEMINI:")
     print(f"   🛑 {err.errors()[0]['msg']}")
+# %%

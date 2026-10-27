@@ -164,10 +164,10 @@ if resultado_voz['datos']:
     ruta_respuesta_mp3 = await asistente.sintetizar_voz_neuronal(texto_respuesta)
     
     print("▶️ Reproduciendo respuesta del agente...")
-    if os.name == 'nt':  
+    if os.name == 'nt':
         os.system(f'start {ruta_respuesta_mp3}')
     else:
-        os.system(f'afplay {ruta_respuesta_mp3}') 
+        os.system(f'afplay {ruta_respuesta_mp3}')
 else:
     print("❌ El pipeline no pudo validar la respuesta de audio.")
 # %%

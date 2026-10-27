@@ -165,3 +165,63 @@ class RegistroAuditoriaMCP(BaseModel):
     version_recurso: str
     estado: Literal["EXITO", "BLOQUEADO_POR_PYDANTIC"]
     detalle: str
+
+
+# 🟢 Contratos Pydantic v2 para Clase 4: Ingeniería Bajo Restricciones (SLA < 600ms, Tokenización y LoRA)
+from typing import Literal
+from pydantic import BaseModel, Field, model_validator
+
+
+class PropuestaArquitecturaSLA(BaseModel):
+    nombre_equipo: str
+    enfoque_tokenizacion: Literal["BPE_BYTE_LEVEL", "WORDPIECE_ESTATICO"]
+    metodo_adaptacion: Literal["FULL_FINE_TUNING", "PEFT_LORA_MAS_RAG"]
+    tamano_modelo_billones: float = Field(..., gt=0, description="Tamaño del modelo en billones de parámetros (ej. 8.0)")
+    usa_cuantizacion_int4: bool
+    usa_cache_semantico: bool
+    presupuesto_max_mensual_usd: float = Field(default=150.0, gt=0)
+
+    latencia_estimada_ms: float = 0.0
+    costo_adaptacion_mensual_usd: float = 0.0
+    tasa_tokens_desconocidos_unk: float = 0.0
+
+    @model_validator(mode="after")
+    def auditar_restricciones_negocio(self) -> "PropuestaArquitecturaSLA":
+        # 1. Auditoría de Tokenización (Requisito: nuevos términos cada mes)
+        if self.enfoque_tokenizacion == "WORDPIECE_ESTATICO":
+            self.tasa_tokens_desconocidos_unk = 18.5
+            raise ValueError(
+                "RECHAZO DE TOKENIZACIÓN: 'WORDPIECE_ESTATICO' genera 18.5% de tokens [UNK] ante jerga nueva mensual. "
+                "Debes elegir 'BPE_BYTE_LEVEL' para descomponer palabras nuevas sin perder información."
+            )
+        self.tasa_tokens_desconocidos_unk = 0.0
+
+        # 2. Auditoría de Adaptación y Costo (Requisito: muy bajo costo mensual)
+        if self.metodo_adaptacion == "FULL_FINE_TUNING":
+            self.costo_adaptacion_mensual_usd = self.tamano_modelo_billones * 320.0
+        else:
+            # PEFT/LoRA entrena < 0.2% de los pesos
+            self.costo_adaptacion_mensual_usd = self.tamano_modelo_billones * 4.5
+
+        if self.costo_adaptacion_mensual_usd > self.presupuesto_max_mensual_usd:
+            raise ValueError(
+                f"VIOLACIÓN DE PRESUPUESTO: El método '{self.metodo_adaptacion}' cuesta "
+                f"${self.costo_adaptacion_mensual_usd:.2f} USD/mes (Límite: ${self.presupuesto_max_mensual_usd:.2f} USD). "
+                "Usa 'PEFT_LORA_MAS_RAG' para cumplir el bajo costo."
+            )
+
+        # 3. Auditoría de Latencia (Requisito estricto: < 600 ms)
+        latencia_base = self.tamano_modelo_billones * 55.0  # ~55ms por cada 1B de parámetros en FP16
+        if self.usa_cuantizacion_int4:
+            latencia_base *= 0.48
+        if self.usa_cache_semantico:
+            latencia_base *= 0.65
+
+        self.latencia_estimada_ms = round(latencia_base + 45.0, 1)  # +45ms de red/tokenización
+
+        if self.latencia_estimada_ms >= 600.0:
+            raise ValueError(
+                f"VIOLACIÓN DE SLA DE LATENCIA: El diseño tarda {self.latencia_estimada_ms} ms (Máximo permitido: 600 ms). "
+                "Reduce el tamaño del modelo (SLM 3B-8B), activa cuantización INT4 o Caché Semántico."
+            )
+        return self
