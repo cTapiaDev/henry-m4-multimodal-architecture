@@ -1,9 +1,8 @@
-# %% [1] Micro-Laboratorio: Fine-Tuning con LoRA (Aprendiendo Estilo, no Hechos)
+# %% [1] Micro-Laboratorio: Fine-Tuning con LoRA
 import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model
-# 🟢 Se importa SFTConfig para las nuevas versiones de la librería trl
 from trl import SFTTrainer, SFTConfig
 
 print("🧠 LABORATORIO: RAG vs FINE-TUNING (Enseñando un Tono Sarcástico)")
@@ -26,7 +25,6 @@ tokenizer.pad_token = tokenizer.eos_token
 base_model = AutoModelForCausalLM.from_pretrained(model_id)
 
 # 3. APLICAR LORA
-# 🟢 fan_in_fan_out=True evita el UserWarning de capa Conv1D en gpt2
 lora_config = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -40,7 +38,6 @@ peft_model = get_peft_model(base_model, lora_config)
 peft_model.print_trainable_parameters()
 
 # 4. ENTRENAMIENTO
-# 🟢 dataset_text_field y max_seq_length ahora se declaran dentro de SFTConfig
 training_args = SFTConfig(
     output_dir="./resultado_micro_lora",
     per_device_train_batch_size=2,
@@ -60,7 +57,7 @@ trainer = SFTTrainer(
     args=training_args,
 )
 
-print("\n🚀 Iniciando inyección de pesos LoRA (Fine-Tuning)...")
+print("\n🚀 Iniciando inyección de pesos LoRA...")
 trainer.train()
 
 # 5. INFERENCIA POST-ENTRENAMIENTO
