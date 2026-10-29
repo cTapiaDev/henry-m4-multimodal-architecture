@@ -225,3 +225,58 @@ class PropuestaArquitecturaSLA(BaseModel):
                 "Reduce el tamaño del modelo (SLM 3B-8B), activa cuantización INT4 o Caché Semántico."
             )
         return self
+
+
+class StartupServingProposal(BaseModel):
+    team_name: str = Field(..., description="Nombre del equipo o grupo de trabajo")
+    adaptation_method: Literal["LORA_PEFT", "FULL_FINE_TUNING"]
+    serving_pattern: Literal["SERVERLESS_AUTOSCALE_WARM", "SERVERLESS_PURO_COLD", "SERVER_BASED_24_7"]
+    bottleneck_type: Literal["CPU_BOUND", "IO_BOUND"]
+    optimization_tool: Literal["CPROFILE", "ASYNCIO"]
+
+    estimated_monthly_cost_usd: float = 0.0
+    handles_300_rpm_spike: bool = False
+
+    @model_validator(mode="after")
+    def validate_startup_architecture(self) -> "StartupServingProposal":
+        # 1. Validar Adaptación (Startup con presupuesto ajustado)
+        if self.adaptation_method == "FULL_FINE_TUNING":
+            raise ValueError(
+                "RECHAZO DE ADAPTACIÓN: 'FULL_FINE_TUNING' es inviable para la startup. "
+                "Además, en picos de 300 solicitudes/minuto, los adaptadores 'LORA_PEFT' pesan pocos MB "
+                "y permiten levantar contenedores rápido sin duplicar el modelo base."
+            )
+
+        # 2. Validar Patrón de Serving (Tráfico de 3 req/hora a 300 req/minuto)
+        if self.serving_pattern == "SERVER_BASED_24_7":
+            self.estimated_monthly_cost_usd = 3850.0
+            raise ValueError(
+                f"DESPERDICIO FINANCIERO: 'SERVER_BASED_24_7' cuesta ${self.estimated_monthly_cost_usd} USD/mes "
+                "pagando GPUs ociosas cuando solo entran 3 solicitudes por hora en la noche."
+            )
+        if self.serving_pattern == "SERVERLESS_PURO_COLD":
+            self.estimated_monthly_cost_usd = 180.0
+            self.handles_300_rpm_spike = False
+            raise ValueError(
+                "FALLO POR COLD START: 'SERVERLESS_PURO_COLD' escala desde 0, pero demora ~22 segundos en "
+                "cargar el LLM en la GPU cuando explota el pico viral de 300 solicitudes/minuto. "
+                "Usa 'SERVERLESS_AUTOSCALE_WARM' (con 1 instancia tibia o arquitectura híbrida)."
+            )
+
+        self.estimated_monthly_cost_usd = 310.0
+        self.handles_300_rpm_spike = True
+
+        # 3. Validar coherencia entre Cuello de Botella y Herramienta (cProfile vs asyncio)
+        if self.bottleneck_type == "CPU_BOUND" and self.optimization_tool == "ASYNCIO":
+            raise ValueError(
+                "ERROR CONCEPTUAL GRAVE: Elegiste 'ASYNCIO' para un cuello de botella 'CPU_BOUND'. "
+                "Si el procesador está al 100% limpiando texto en Python, asyncio NO acelera nada. "
+                "Debes diagnosticar con 'CPROFILE' y optimizar el algoritmo."
+            )
+        if self.bottleneck_type == "IO_BOUND" and self.optimization_tool == "CPROFILE":
+            raise ValueError(
+                "HERRAMIENTA INCORRECTA: Si el cuello de botella es 'IO_BOUND' (esperar respuestas de red del LLM "
+                "a 300 req/min), necesitas concurrencia asíncrona con 'ASYNCIO' para procesar en paralelo."
+            )
+
+        return self
